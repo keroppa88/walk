@@ -54,6 +54,36 @@
     #music-info .mi-label  { font-size: 0.72rem; letter-spacing: 0.08em; opacity: 0.7; margin-bottom: 3px; }
     #music-info .mi-title  { font-size: 1rem; letter-spacing: 0.04em; margin-bottom: 2px; }
     #music-info .mi-artist { font-size: 0.78rem; opacity: 0.75; }
+    #mobile-ui {
+      position: fixed; inset: 0; z-index: 25; pointer-events: none; display: none;
+      font-family: sans-serif;
+    }
+    #mobile-ui.show { display: block; }
+    .touch-pad {
+      position: absolute; bottom: 22px; width: 148px; height: 148px;
+      border-radius: 50%; border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(20,22,35,0.3); backdrop-filter: blur(2px); pointer-events: auto;
+      touch-action: none;
+    }
+    #move-pad { left: 20px; }
+    #look-pad { right: 20px; }
+    .touch-stick {
+      position: absolute; left: 50%; top: 50%; width: 54px; height: 54px;
+      margin-left: -27px; margin-top: -27px; border-radius: 50%;
+      background: rgba(245,217,139,0.65); box-shadow: 0 0 10px rgba(0,0,0,0.4);
+    }
+    #run-btn {
+      position: absolute; right: 26px; bottom: 188px; width: 88px; height: 42px;
+      border: 1px solid rgba(255,255,255,0.3); border-radius: 20px;
+      background: rgba(200,120,48,0.65); color: #fff; font-weight: bold;
+      pointer-events: auto; touch-action: none;
+    }
+    #mobile-tip {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+      color: #fff; background: rgba(0,0,0,0.4); padding: 7px 12px; border-radius: 999px;
+      font-size: 0.78rem; z-index: 26; display: none;
+    }
+    #mobile-tip.show { display: block; }
   </style>
 </head>
 <body>
@@ -61,6 +91,12 @@
   <p>ロード中...</p>
   <div id="pbar"><div id="pfill"></div></div>
 </div>
+<div id="mobile-ui">
+  <div id="move-pad" class="touch-pad"><div id="move-stick" class="touch-stick"></div></div>
+  <div id="look-pad" class="touch-pad"><div id="look-stick" class="touch-stick"></div></div>
+  <button id="run-btn">RUN</button>
+</div>
+<div id="mobile-tip">スマホ操作: 左で移動 / 右で視点 / RUNでダッシュ</div>
 <div id="music-info">
   <div class="mi-label">♪ NOW PLAYING</div>
   <div class="mi-title" id="music-title"></div>
@@ -252,19 +288,35 @@ function snapToGround() {
 
 // ── yaw / pitch ───────────────────────────────────────────
 let yaw = 0, pitch = 0, isPointerLocked = false;
+const pointerLockSupported = 'pointerLockElement' in document;
+let mouseDragging = false;
+let mobileLookX = 0;
+let mobileLookY = 0;
 
 document.addEventListener('pointerlockchange', () => {
   isPointerLocked = document.pointerLockElement === document.body;
   if (!isPointerLocked) showOverlay();
 });
 document.addEventListener('mousemove', e => {
-  if (!isPointerLocked) return;
-  yaw   -= e.movementX * 0.002;
-  pitch -= e.movementY * 0.002;
+  if (!isPointerLocked && !mouseDragging) return;
+  const mx = (isPointerLocked ? e.movementX : e.movementX || e.clientX - lastMouseX);
+  const my = (isPointerLocked ? e.movementY : e.movementY || e.clientY - lastMouseY);
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
+  yaw   -= mx * 0.002;
+  pitch -= my * 0.002;
   pitch  = Math.max(-Math.PI / 2 * 0.9, Math.min(Math.PI / 2 * 0.9, pitch));
   camera.rotation.y = yaw;
   camera.rotation.x = pitch;
 });
+let lastMouseX = 0, lastMouseY = 0;
+renderer.domElement.addEventListener('mousedown', e => {
+  if (pointerLockSupported || e.button !== 0) return;
+  mouseDragging = true;
+  lastMouseX = e.clientX;
+  lastMouseY = e.clientY;
+});
+window.addEventListener('mouseup', () => mouseDragging = false);
 
 // ── キーボード ────────────────────────────────────────────
 const keys = {};
@@ -278,7 +330,7 @@ const EYE_HEIGHT = 2.0;
 const GP_DEAD = 0.12; // スティック不感帯
 
 function updateMovement() {
-  if (!isPointerLocked) return;
+  if (!isPointerLocked && !isTouchDevice) return;
   const now  = performance.now();
   const dt   = Math.min((now - lastTime) / 1000, 0.05);
   lastTime   = now;
@@ -297,6 +349,13 @@ function updateMovement() {
       camera.rotation.x = pitch;
     }
   }
+  if (mobileLookX || mobileLookY) {
+    yaw   -= mobileLookX * 0.045;
+    pitch -= mobileLookY * 0.035;
+    pitch  = Math.max(-Math.PI / 2 * 0.9, Math.min(Math.PI / 2 * 0.9, pitch));
+    camera.rotation.y = yaw;
+    camera.rotation.x = pitch;
+  }
 
   // ── 移動量（キーボード + 左スティック）───────────────
   let mz = (keys.KeyS || keys.ArrowDown  ? 1 : 0) - (keys.KeyW || keys.ArrowUp   ? 1 : 0);
@@ -305,8 +364,11 @@ function updateMovement() {
     if (Math.abs(gp.axes[0]) > GP_DEAD) mx += gp.axes[0];
     if (Math.abs(gp.axes[1]) > GP_DEAD) mz += gp.axes[1];
   }
+  mx += touchMoveX;
+  mz += touchMoveY;
   // Shift または R2(axes[5] or button[7]) で走る
   const running = keys.ShiftLeft || keys.ShiftRight ||
+                  touchRunPressed ||
                   (gp && (gp.buttons[7]?.pressed || gp.buttons[6]?.pressed));
   const speed = running ? 40 : 20;
 
@@ -552,9 +614,14 @@ hillBgm.volume = 0.6;
 
 startBtn.addEventListener('click', () => {
   overlay.classList.add('hidden');
-  document.body.requestPointerLock();
+  if (pointerLockSupported && !isTouchDevice) document.body.requestPointerLock();
   bgm.play().catch(() => {});
   showMusicInfo('bgm');
+  if (isTouchDevice) {
+    mobileUI.classList.add('show');
+    mobileTip.classList.add('show');
+    setTimeout(() => mobileTip.classList.remove('show'), 6000);
+  }
 });
 
 // ── 砂丘エリア音楽切替（距離ベース連続フェード）──────────
@@ -598,7 +665,7 @@ function stopAllMusic() {
 }
 
 function updateDuneMusic() {
-  if (!isPointerLocked || duneAreas.length === 0) return;
+  if ((!isPointerLocked && !isTouchDevice) || duneAreas.length === 0) return;
   const px = camera.position.x, pz = camera.position.z;
   const master = getMasterVol();
 
@@ -678,6 +745,57 @@ ovVolSlider.addEventListener('input', () => {
   volSlider.value = v;
   volValue.textContent = v + '%';
 });
+
+// ── タッチ操作 ─────────────────────────────────────────────
+const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+const mobileUI  = document.getElementById('mobile-ui');
+const mobileTip = document.getElementById('mobile-tip');
+const movePad   = document.getElementById('move-pad');
+const moveStick = document.getElementById('move-stick');
+const lookPad   = document.getElementById('look-pad');
+const lookStick = document.getElementById('look-stick');
+const runBtn    = document.getElementById('run-btn');
+let touchMoveX = 0, touchMoveY = 0;
+let touchRunPressed = false;
+
+function bindPad(pad, stick, onMove) {
+  const R = 74;
+  const SR = 34;
+  const reset = () => {
+    stick.style.transform = 'translate(0px, 0px)';
+    onMove(0, 0);
+  };
+  const handlePoint = (clientX, clientY) => {
+    const r = pad.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    let dx = clientX - cx;
+    let dy = clientY - cy;
+    const len = Math.hypot(dx, dy);
+    if (len > R) {
+      dx = (dx / len) * R;
+      dy = (dy / len) * R;
+    }
+    stick.style.transform = `translate(${dx - SR}px, ${dy - SR}px)`;
+    onMove(dx / R, dy / R);
+  };
+  pad.addEventListener('pointerdown', e => {
+    pad.setPointerCapture(e.pointerId);
+    handlePoint(e.clientX, e.clientY);
+  });
+  pad.addEventListener('pointermove', e => {
+    if (!pad.hasPointerCapture(e.pointerId)) return;
+    handlePoint(e.clientX, e.clientY);
+  });
+  pad.addEventListener('pointerup', reset);
+  pad.addEventListener('pointercancel', reset);
+}
+
+bindPad(movePad, moveStick, (x, y) => { touchMoveX = x; touchMoveY = y; });
+bindPad(lookPad, lookStick, (x, y) => { mobileLookX = x; mobileLookY = y; });
+runBtn.addEventListener('pointerdown', () => touchRunPressed = true);
+runBtn.addEventListener('pointerup',   () => touchRunPressed = false);
+runBtn.addEventListener('pointercancel', () => touchRunPressed = false);
 
 // ── レンダリング ──────────────────────────────────────────
 function animate() {
