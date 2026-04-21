@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>Desert Walk</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #loading {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: #0d1018; z-index: 20; transition: opacity 0.5s;
+    }
+    #loading.hidden { opacity: 0; pointer-events: none; }
+    #loading p { color: #f5d98b; font-size: 1rem; margin-bottom: 1em; }
+    #pbar { width: 240px; height: 3px; background: #333; border-radius: 3px; overflow: hidden; }
+    #pfill { height: 100%; width: 0%; background: linear-gradient(90deg,#c87830,#f5d98b); border-radius: 3px; transition: width 0.2s; }
+    #overlay {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.52); backdrop-filter: blur(4px);
+      z-index: 10; transition: opacity 0.4s;
+    }
+    #overlay.hidden { opacity: 0; pointer-events: none; }
+    #overlay h1 { font-size: 2.8rem; color: #f5d98b; letter-spacing: 0.12em; margin-bottom: 0.3em; }
+    #overlay p { color: #ccc; font-size: 0.96rem; }
+    #start-btn {
+      margin-top: 1.8em; padding: 0.65em 2.2em;
+      background: #c87830; color: #fff; border: none;
+      border-radius: 6px; font-size: 1.1rem; cursor: pointer;
+    }
+    #vol-menu {
+      position: fixed; display: none;
+      background: rgba(15,10,25,0.92); backdrop-filter: blur(8px);
+      border: 1px solid rgba(200,160,220,0.3);
+      border-radius: 10px; padding: 16px 20px;
+      color: #e8d8f0; font-family: sans-serif; font-size: 0.9rem;
+      z-index: 30; min-width: 200px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+    }
+    #vol-menu p { margin: 0 0 10px; font-size: 0.8rem; color: #b89ecc; }
+    #vol-slider {
+      width: 100%; accent-color: #a070c8; cursor: pointer;
+    }
+    #vol-value { text-align: right; font-size: 0.85rem; color: #f5d98b; margin-top: 6px; }
+    #music-info {
+      position: fixed; right: 24px; bottom: 28px;
+      text-align: right;
+      color: #fff; font-family: sans-serif; font-size: 0.88rem;
+      pointer-events: none; z-index: 5;
+      opacity: 0; transition: opacity 0.6s;
+    }
+    #music-info.show { opacity: 1; }
+    #music-info .mi-label  { font-size: 0.72rem; letter-spacing: 0.08em; opacity: 0.7; margin-bottom: 3px; }
+    #music-info .mi-title  { font-size: 1rem; letter-spacing: 0.04em; margin-bottom: 2px; }
+    #music-info .mi-artist { font-size: 0.78rem; opacity: 0.75; }
+  </style>
+</head>
+<body>
+<div id="loading">
+  <p>ロード中...</p>
+  <div id="pbar"><div id="pfill"></div></div>
+</div>
+<div id="music-info">
+  <div class="mi-label">♪ NOW PLAYING</div>
+  <div class="mi-title" id="music-title"></div>
+  <div class="mi-artist" id="music-artist"></div>
+</div>
+<div id="vol-menu">
+  <p>BGM 音量</p>
+  <input id="vol-slider" type="range" min="0" max="100" value="60">
+  <div id="vol-value">60%</div>
+</div>
+<div id="overlay">
+  <h1>Desert Walk</h1>
+  <p>移動：<strong style="color:#f5d98b;">WASD</strong> &nbsp;|&nbsp; 視線：<strong style="color:#f5d98b;">マウス</strong> &nbsp;|&nbsp; 走る：<strong style="color:#f5d98b;">Shift</strong></p>
+  <p style="font-size:0.82rem;color:#aaa;margin-top:0.3em;">コントローラー：左スティック移動 &nbsp;|&nbsp; 右スティック視点 &nbsp;|&nbsp; R2走る</p>
+  <div style="margin-top:1.4em;display:flex;align-items:center;gap:12px;">
+    <span style="color:#b89ecc;font-size:0.85rem;white-space:nowrap;">BGM音量</span>
+    <input id="ov-vol-slider" type="range" min="0" max="100" value="60"
+      style="width:160px;accent-color:#a070c8;cursor:pointer;">
+    <span id="ov-vol-value" style="color:#f5d98b;font-size:0.85rem;min-width:3em;">60%</span>
+  </div>
+  <button id="start-btn">出発する</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.163.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.163.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ── シーン ────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xC9A8D4);
+
+// ── レンダラー ────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+// ── カメラ ────────────────────────────────────────────────
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 4000);
+camera.rotation.order = 'YXZ';
+
+// ── ライト ────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+const sun = new THREE.DirectionalLight(0xFFE4B0, 1.2);
+sun.position.set(200, 300, 150);
+scene.add(sun);
+
+// ── グラデーション空（シェーダー球）────────────────────
+const skyGeo = new THREE.SphereGeometry(3000, 32, 16);
+const skyMat = new THREE.ShaderMaterial({
+  uniforms: {
+    topColor:    { value: new THREE.Color(0x2E1B4E) },
+    midColor:    { value: new THREE.Color(0x7B5EA7) },
+    horizonColor:{ value: new THREE.Color(0xC9A8D4) },
+  },
+  vertexShader: `
+    varying vec3 vWorldPos;
+    void main() {
+      vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 topColor;
+    uniform vec3 midColor;
+    uniform vec3 horizonColor;
+    varying vec3 vWorldPos;
+    void main() {
+      float h = normalize(vWorldPos).y;
+      float t = max(h, 0.0);
+      vec3 col = mix(horizonColor, midColor, smoothstep(0.0, 0.3, t));
+      col      = mix(col, topColor,          smoothstep(0.2, 1.0, t));
+      if (h < 0.0) col = mix(col, vec3(0.15, 0.1, 0.2), min(-h * 3.0, 1.0));
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `,
+  side: THREE.BackSide,
+  depthWrite: false,
+});
+const skyMesh = new THREE.Mesh(skyGeo, skyMat);
+scene.add(skyMesh);
+
+// 大気霞
+scene.fog = new THREE.FogExp2(0xC9A8D4, 0.0003);
+
+// ── 砂漠地面 ─────────────────────────────────────────────
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(12000, 12000),
+  new THREE.MeshBasicMaterial({ color: 0xC4A46B })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.02;
+ground.geometry.computeBoundingBox();
+ground.geometry.computeBoundingSphere();
+scene.add(ground);
+
+// ── 衝突判定用 ────────────────────────────────────────────
+const walls = [];
+let sceneModel = null;
+let duneNearEdge = null;
+const collisionBoxes = []; // メッシュごとのワールド空間BBox
+const duneAreas = []; // 砂丘エリア情報
+const PLAYER_R = 0.6;
+const MAX_STEP  = 1.5; // 登れる段差（建物の壁より低く設定）
+
+const groundRay = new THREE.Raycaster();
+
+function buildCollisionBoxes() {
+  collisionBoxes.length = 0;
+  walls.length = 0;
+  sceneModel.traverse(child => {
+    if (!child.isMesh || !child.geometry) return;
+    child.geometry.computeBoundingBox();
+    child.geometry.computeBoundingSphere();
+    walls.push(child);
+    const wb = new THREE.Box3().copy(child.geometry.boundingBox).applyMatrix4(child.matrixWorld);
+    collisionBoxes.push(wb);
+  });
+}
+
+// 指定XZの真上から下向きレイで地面高さを取得
+function getGroundY(x, z, fromY) {
+  groundRay.set(
+    new THREE.Vector3(x, fromY + MAX_STEP + 2, z),
+    new THREE.Vector3(0, -1, 0)
+  );
+  groundRay.near = 0;
+  groundRay.far  = MAX_STEP + fromY + 20;
+  const hits = groundRay.intersectObjects(walls, false);
+  return hits.length > 0 ? hits[0].point.y : null;
+}
+
+function moveWithCollision(dx, dz) {
+  const pos = camera.position;
+  const curY = pos.y - EYE_HEIGHT;
+
+  const tryAxis = (ndx, ndz) => {
+    if (Math.abs(ndx) < 0.0001 && Math.abs(ndz) < 0.0001) return;
+    const nx = pos.x + ndx;
+    const nz = pos.z + ndz;
+
+    // 次の位置の地面高さを下向きレイで取得
+    const nextGroundY = getGroundY(nx, nz, pos.y);
+
+    if (nextGroundY !== null) {
+      const step = nextGroundY - curY;
+      if (step <= MAX_STEP) {
+        // 登れる坂道または平地 → 移動して高さ調整
+        pos.x += ndx;
+        pos.z += ndz;
+        pos.y = nextGroundY + EYE_HEIGHT;
+        return;
+      }
+      // 段差が大きすぎる → 壁としてブロック
+      return;
+    }
+
+    // 地面なし → バウンディングボックスで壁チェック
+    const playerBox = new THREE.Box3(
+      new THREE.Vector3(nx - PLAYER_R, curY - 0.1, nz - PLAYER_R),
+      new THREE.Vector3(nx + PLAYER_R, curY + MAX_STEP + 0.1, nz + PLAYER_R)
+    );
+    for (const wb of collisionBoxes) {
+      if (wb.intersectsBox(playerBox) && wb.max.y - curY > MAX_STEP) return;
+    }
+    pos.x += ndx;
+    pos.z += ndz;
+  };
+
+  tryAxis(dx, 0);
+  tryAxis(0, dz);
+}
+
+function snapToGround() {
+  const gy = getGroundY(camera.position.x, camera.position.z, camera.position.y);
+  camera.position.y = (gy !== null ? gy : 0) + EYE_HEIGHT;
+}
+
+// ── yaw / pitch ───────────────────────────────────────────
+let yaw = 0, pitch = 0, isPointerLocked = false;
+
+document.addEventListener('pointerlockchange', () => {
+  isPointerLocked = document.pointerLockElement === document.body;
+  if (!isPointerLocked) showOverlay();
+});
+document.addEventListener('mousemove', e => {
+  if (!isPointerLocked) return;
+  yaw   -= e.movementX * 0.002;
+  pitch -= e.movementY * 0.002;
+  pitch  = Math.max(-Math.PI / 2 * 0.9, Math.min(Math.PI / 2 * 0.9, pitch));
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+});
+
+// ── キーボード ────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', e => keys[e.code] = true);
+window.addEventListener('keyup',   e => keys[e.code] = false);
+
+// ── 移動 ─────────────────────────────────────────────────
+const _fwd = new THREE.Vector3(), _rgt = new THREE.Vector3();
+let lastTime = performance.now();
+const EYE_HEIGHT = 2.0;
+const GP_DEAD = 0.12; // スティック不感帯
+
+function updateMovement() {
+  if (!isPointerLocked) return;
+  const now  = performance.now();
+  const dt   = Math.min((now - lastTime) / 1000, 0.05);
+  lastTime   = now;
+
+  // ── ゲームパッド入力 ──────────────────────────────────
+  const gp = navigator.getGamepads()[0];
+  if (gp) {
+    // 右スティック → 視点回転
+    const rx = Math.abs(gp.axes[2]) > GP_DEAD ? gp.axes[2] : 0;
+    const ry = Math.abs(gp.axes[3]) > GP_DEAD ? gp.axes[3] : 0;
+    if (rx || ry) {
+      yaw   -= rx * 0.04;
+      pitch -= ry * 0.03;
+      pitch  = Math.max(-Math.PI / 2 * 0.9, Math.min(Math.PI / 2 * 0.9, pitch));
+      camera.rotation.y = yaw;
+      camera.rotation.x = pitch;
+    }
+  }
+
+  // ── 移動量（キーボード + 左スティック）───────────────
+  let mz = (keys.KeyS || keys.ArrowDown  ? 1 : 0) - (keys.KeyW || keys.ArrowUp   ? 1 : 0);
+  let mx = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0);
+  if (gp) {
+    if (Math.abs(gp.axes[0]) > GP_DEAD) mx += gp.axes[0];
+    if (Math.abs(gp.axes[1]) > GP_DEAD) mz += gp.axes[1];
+  }
+  // Shift または R2(axes[5] or button[7]) で走る
+  const running = keys.ShiftLeft || keys.ShiftRight ||
+                  (gp && (gp.buttons[7]?.pressed || gp.buttons[6]?.pressed));
+  const speed = running ? 40 : 20;
+
+  if (mx || mz) {
+    _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    _fwd.y = 0; _fwd.normalize();
+    _rgt.set(1, 0, 0).applyQuaternion(camera.quaternion);
+    _rgt.y = 0; _rgt.normalize();
+    const dx = (_fwd.x * (-mz) + _rgt.x * mx) * speed * dt;
+    const dz = (_fwd.z * (-mz) + _rgt.z * mx) * speed * dt;
+    if (collisionBoxes.length > 0) {
+      moveWithCollision(dx, dz);
+    } else {
+      camera.position.x += dx;
+      camera.position.z += dz;
+    }
+  }
+  snapToGround();
+}
+
+// ── GLTF 読み込み ─────────────────────────────────────────
+const pfill   = document.getElementById('pfill');
+const loading = document.getElementById('loading');
+
+new GLTFLoader().load('sa.gltf?v=' + Date.now(), gltf => {
+  const model = gltf.scene;
+  const SCALE = 787 / 31010.5;
+
+  model.traverse(child => {
+    if (!child.isMesh) return;
+    child.frustumCulled = false;
+    walls.push(child);
+
+    const fixMat = m => {
+      if (!m) return;
+      // ピンク・マゼンタ系マテリアル → 非表示
+      if (m.color && m.color.r > 0.6 && m.color.g < 0.35 && m.color.b > 0.5) {
+        child.visible = false;
+        return;
+      }
+      if (!m.transparent || m.opacity > 0.5) {
+        m.transparent = false;
+        m.opacity     = 1.0;
+        m.depthWrite  = true;
+      }
+      m.needsUpdate = true;
+    };
+    if (Array.isArray(child.material)) child.material.forEach(fixMat);
+    else fixMat(child.material);
+  });
+
+  model.scale.setScalar(SCALE);
+  model.updateMatrixWorld(true);
+
+  const box = new THREE.Box3().setFromObject(model);
+  const cen = box.getCenter(new THREE.Vector3());
+
+  model.position.x = -cen.x;
+  model.position.z = -cen.z;
+  model.position.y = 0;
+
+  scene.add(model);
+  model.updateMatrixWorld(true);
+  sceneModel = model;
+  buildCollisionBoxes();
+  ground.updateMatrixWorld(true);
+  walls.push(ground); // 平地でもgetGroundYが地面を検出できるように
+
+  const box2 = new THREE.Box3().setFromObject(model);
+  const c2   = box2.getCenter(new THREE.Vector3());
+
+  // スタート位置：道路上（建物右側の近く）
+  camera.position.set(box2.max.x + 3, EYE_HEIGHT, c2.z);
+  yaw = Math.PI; pitch = 0; // 建物方向を向く
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+
+  // ── 共有リソース（石ころ用）─────────────────────────────
+  const rockGeo  = new THREE.IcosahedronGeometry(1, 0);
+  const rockMats = [
+    new THREE.MeshLambertMaterial({ color: 0xC8A84B }), // 黄土色
+    new THREE.MeshLambertMaterial({ color: 0xB89A3A }), // 黄土色（暗め）
+    new THREE.MeshLambertMaterial({ color: 0xD4C8B0 }), // 薄い灰色
+    new THREE.MeshLambertMaterial({ color: 0xC0B8A8 }), // 薄い灰色（暗め）
+    new THREE.MeshLambertMaterial({ color: 0xC4A882 }), // 薄い茶色
+    new THREE.MeshLambertMaterial({ color: 0xB09870 }), // 薄い茶色（暗め）
+  ];
+  const rng = (a, b) => a + Math.random() * (b - a);
+  let rockIdx = 0;
+  function spawnRock(rx, ry, rz) {
+    const m = new THREE.Mesh(rockGeo, rockMats[rockIdx++ % rockMats.length]);
+    const s = rng(0.06, 0.30);
+    m.scale.set(s * rng(0.7, 1.3), s * rng(0.4, 0.8), s * rng(0.7, 1.3));
+    m.rotation.set(rng(0, Math.PI), rng(0, Math.PI * 2), rng(0, Math.PI));
+    m.position.set(rx, ry, rz);
+    scene.add(m);
+  }
+
+  // ── 砂丘（建物の左側）────────────────────────────────
+  const sandMat  = new THREE.MeshBasicMaterial({ color: 0xD4A84B, side: THREE.DoubleSide });
+  const sandMat2 = new THREE.MeshBasicMaterial({ color: 0xC8953A, side: THREE.DoubleSide });
+
+  function addDune(peakX, peakZ, peakY, wz, slopeLen, mat, rockCount) {
+    const z0 = peakZ - wz / 2, z1 = peakZ + wz / 2;
+    const xNear = peakX + slopeLen;
+    const xFar  = peakX - slopeLen * 1.2;
+
+    // Z方向にテーパー（両端を地面下に沈めて切れ目を隠す）
+    const zSlices = [
+      [z0,            -0.6],  // 地面下 → 切れ目非表示
+      [z0 + wz*0.08,   0.0],
+      [z0 + wz*0.24,   0.65],
+      [peakZ,          1.00],
+      [z1 - wz*0.24,   0.65],
+      [z1 - wz*0.08,   0.0],
+      [z1,            -0.6],  // 地面下 → 切れ目非表示
+    ];
+    const vArr = [];
+    for (const [z, hf] of zSlices) {
+      const py = peakY * hf;
+      vArr.push(xNear, 0,  z,
+                peakX, py, z,
+                xFar,  0,  z);
+    }
+    const iArr = [];
+    for (let s = 0; s < zSlices.length - 1; s++) {
+      const b = s * 3;
+      iArr.push(b,   b+3, b+1,  b+3, b+4, b+1);  // near slope
+      iArr.push(b+1, b+4, b+2,  b+4, b+5, b+2);  // far slope
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vArr), 3));
+    geo.setIndex(iArr);
+    geo.computeVertexNormals();
+    geo.computeBoundingBox();
+    geo.computeBoundingSphere();
+    const mesh = new THREE.Mesh(geo, mat);
+    scene.add(mesh);
+    walls.push(mesh);
+    duneAreas.push({ xMin: xFar, xMax: xNear, zMin: z0, zMax: z1, peakY, peakX });
+
+    // 斜面に石ころを散布（Z方向テーパーhfを考慮）
+    for (let i = 0; i < rockCount; i++) {
+      const rz = z0 + Math.random() * (z1 - z0);
+      let hf = 1.0;
+      for (let s = 0; s < zSlices.length - 1; s++) {
+        if (rz >= zSlices[s][0] && rz <= zSlices[s+1][0]) {
+          hf = zSlices[s][1] + (zSlices[s+1][1] - zSlices[s][1]) *
+               (rz - zSlices[s][0]) / (zSlices[s+1][0] - zSlices[s][0]);
+          break;
+        }
+      }
+      if (hf <= 0) continue;
+      const t = Math.random();
+      const nearSide = Math.random() < 0.5;
+      const rx = nearSide
+        ? xNear + (peakX - xNear) * t
+        : peakX + (xFar  - peakX) * t;
+      const ry = (nearSide ? peakY * t : peakY * (1 - t)) * hf;
+      spawnRock(rx, ry, rz);
+    }
+  }
+
+  // 建物BBoxを基準に砂丘を配置
+  const bw = box2.max.x - box2.min.x;
+  const bz = box2.max.z - box2.min.z;
+  const leftEdge = box2.min.x;
+  const midZ = c2.z;
+  addDune(leftEdge - bw * 4.0,  midZ,            bw * 0.525, bz * 1.40, bw * 0.45, sandMat,  1600);
+  addDune(leftEdge - bw * 6.4,  midZ - bz * 1.5, bw * 0.375, bz * 1.12, bw * 0.35, sandMat2, 1200);
+  addDune(leftEdge - bw * 5.2,  midZ + bz * 1.5, bw * 0.42,  bz * 1.12, bw * 0.40, sandMat,  1200);
+  duneNearEdge = Math.max(...duneAreas.map(d => d.xMax));
+
+  // ── 石ころ（道路・建物・砂丘エリア除外）─────────────
+  const exX0 = box2.min.x - 2, exX1 = box2.max.x + 8;
+  const exZ0 = box2.min.z - 2, exZ1 = box2.max.z + 2;
+  let placed = 0, attempts = 0;
+  while (placed < 2000 && attempts < 20000) {
+    attempts++;
+    const rx = rng(-500, 500), rz = rng(-500, 500);
+    if (rx > exX0 && rx < exX1 && rz > exZ0 && rz < exZ1) continue;
+    let inDuneZone = false;
+    for (const d of duneAreas) {
+      if (rx >= d.xMin && rx <= d.xMax && rz >= d.zMin && rz <= d.zMax) { inDuneZone = true; break; }
+    }
+    if (inDuneZone) continue;
+    spawnRock(rx, 0, rz);
+    placed++;
+  }
+
+  // ── yama.gltf 山脈（砂丘の遠景）────────────────────────────
+  new GLTFLoader().load('yama.gltf', yamaGltf => {
+    const yama = yamaGltf.scene;
+    // 非均一スケール: GLTF Y→世界Z（横幅1000ユニット=6峰全体）, GLTF Z→世界Y（高さ250ユニット）
+    const SY = 1000 / 1421375430;  // 横幅方向
+    const SZ = 250 / 35333710;     // 高さ方向
+    const SX = SY;                  // 奥行き列間隔（横幅と同比率）
+    yama.scale.set(SX, SY, SZ);
+    // SketchUp Z-up（GLTF Y=水平幅, Z=高さ）→ Three.js Y-up
+    yama.rotation.x = -Math.PI / 2;
+    yama.updateMatrixWorld(true);
+    const yb = new THREE.Box3().setFromObject(yama);
+    const yc = yb.getCenter(new THREE.Vector3());
+    // 砂丘近端から800ユニット先にGroup A（手前列）を配置
+    const yamaFrontRawX = 48617500;
+    yama.position.x = (duneNearEdge - 800) - yamaFrontRawX * SX;
+    yama.position.z = midZ - yc.z;
+    yama.position.y = -yb.min.y;
+    yama.traverse(child => {
+      if (!child.isMesh) return;
+      child.frustumCulled = false;
+      const fixM = m => {
+        if (!m) return;
+        m.side = THREE.DoubleSide;
+        m.fog = false;       // 霧で消えないよう無効化
+        m.needsUpdate = true;
+      };
+      Array.isArray(child.material) ? child.material.forEach(fixM) : fixM(child.material);
+    });
+    scene.add(yama);
+  });
+
+  loading.classList.add('hidden');
+  setTimeout(() => loading.style.display = 'none', 600);
+}, xhr => {
+  if (xhr.total) pfill.style.width = (xhr.loaded / xhr.total * 100) + '%';
+}, err => {
+  console.error(err);
+  loading.querySelector('p').textContent = '読み込みエラー';
+});
+
+// ── オーバーレイ ──────────────────────────────────────────
+const overlay  = document.getElementById('overlay');
+const startBtn = document.getElementById('start-btn');
+function showOverlay() { overlay.classList.remove('hidden'); startBtn.textContent = '再開する'; }
+const bgm = new Audio('I\'m Calling You.mp3');
+bgm.loop   = true;
+bgm.volume = 0.6;
+
+const hillBgm = new Audio('On-The-Hill.mp3');
+hillBgm.loop   = true;
+hillBgm.volume = 0.6;
+
+startBtn.addEventListener('click', () => {
+  overlay.classList.add('hidden');
+  document.body.requestPointerLock();
+  bgm.play().catch(() => {});
+  showMusicInfo('bgm');
+});
+
+// ── 砂丘エリア音楽切替（距離ベース連続フェード）──────────
+const DUNE_FADE_DIST = 25;
+function getMasterVol() { return parseFloat(volSlider.value) / 100; }
+
+const musicInfoEl  = document.getElementById('music-info');
+const musicTitleEl = document.getElementById('music-title');
+const musicArtEl   = document.getElementById('music-artist');
+let musicInfoTimer = null;
+let currentTrack   = null;
+
+const TRACKS = {
+  bgm:     { title: "I'm Calling You",  artist: 'Jevetta Steele  (Bagdad Café)' },
+  hillBgm: { title: 'On The Hill',      artist: 'Ryuichi Sakamoto  (The Sheltering Sky)' },
+};
+
+function showMusicInfo(key) {
+  if (currentTrack === key) return;
+  currentTrack = key;
+  const t = TRACKS[key];
+  musicTitleEl.textContent = t.title;
+  musicArtEl.textContent   = t.artist;
+  musicInfoEl.classList.add('show');
+  clearTimeout(musicInfoTimer);
+  musicInfoTimer = setTimeout(() => musicInfoEl.classList.remove('show'), 10000);
+}
+
+function playOnly(audio, vol) {
+  [bgm, hillBgm].forEach(a => { if (a !== audio) { a.volume = 0; a.pause(); } });
+  audio.volume = vol;
+  if (audio.paused) {
+    audio.play().catch(() => {});
+    showMusicInfo(audio === bgm ? 'bgm' : 'hillBgm');
+  }
+}
+function stopAllMusic() {
+  bgm.volume = 0; bgm.pause();
+  hillBgm.volume = 0; hillBgm.pause();
+  currentTrack = null;
+}
+
+function updateDuneMusic() {
+  if (!isPointerLocked || duneAreas.length === 0) return;
+  const px = camera.position.x, pz = camera.position.z;
+  const master = getMasterVol();
+
+  let minDist = Infinity;
+  let climbingSide = false, hillSide = false;
+
+  for (const d of duneAreas) {
+    const dx = Math.max(d.xMin - px, 0, px - d.xMax);
+    const dz = Math.max(d.zMin - pz, 0, pz - d.zMax);
+    const dist = Math.sqrt(dx * dx + dz * dz);
+    if (dist < minDist) minDist = dist;
+    if (dist === 0) {
+      // 砂丘内：peakXより建物側=登り（無音）、peakX以降=頂点・下り（hillBgm）
+      if (px <= d.peakX) hillSide = true;
+      else climbingSide = true;
+    }
+    // 砂丘の遠端を越えた先も hillBgm 継続
+    if (px < d.xMin) hillSide = true;
+  }
+
+  if (hillSide) {
+    playOnly(hillBgm, master);
+  } else if (climbingSide) {
+    stopAllMusic();
+  } else {
+    const volFactor = Math.min(minDist / DUNE_FADE_DIST, 1);
+    playOnly(bgm, master * volFactor);
+  }
+}
+
+// ── 音量メニュー ──────────────────────────────────────────
+const volMenu   = document.getElementById('vol-menu');
+const volSlider = document.getElementById('vol-slider');
+const volValue  = document.getElementById('vol-value');
+
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+document.addEventListener('mousedown', e => {
+  if (e.button !== 2) return;
+  // ポインターロック中は解除してメニューを表示
+  if (document.pointerLockElement) document.exitPointerLock();
+  volMenu.style.display = 'block';
+  // ポインターロック中は clientX/Y が 0 になるので画面中央に出す
+  const cx = e.clientX || window.innerWidth  / 2;
+  const cy = e.clientY || window.innerHeight / 2;
+  const x  = Math.min(cx, window.innerWidth  - 230);
+  const y  = Math.min(cy, window.innerHeight - 120);
+  volMenu.style.left = x + 'px';
+  volMenu.style.top  = y + 'px';
+});
+
+document.addEventListener('click', e => {
+  if (!volMenu.contains(e.target)) volMenu.style.display = 'none';
+});
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Escape') volMenu.style.display = 'none';
+});
+
+volSlider.addEventListener('input', () => {
+  const v = volSlider.value;
+  bgm.volume = v / 100;
+  hillBgm.volume = v / 100;
+  volValue.textContent = v + '%';
+  ovVolSlider.value = v;
+  ovVolValue.textContent = v + '%';
+});
+
+// オーバーレイ内スライダー
+const ovVolSlider = document.getElementById('ov-vol-slider');
+const ovVolValue  = document.getElementById('ov-vol-value');
+ovVolSlider.addEventListener('input', () => {
+  const v = ovVolSlider.value;
+  bgm.volume = v / 100;
+  hillBgm.volume = v / 100;
+  ovVolValue.textContent = v + '%';
+  volSlider.value = v;
+  volValue.textContent = v + '%';
+});
+
+// ── レンダリング ──────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+  updateMovement();
+  updateDuneMusic();
+  skyMesh.position.copy(camera.position); // 空球体をカメラに追従
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>
